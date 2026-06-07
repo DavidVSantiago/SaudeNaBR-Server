@@ -6,7 +6,8 @@
 const API_KEY = "#htxrlLaWaU3F8aNnjviFhreqyWzI1YowyZ8bFoCBNjhp8umKToLxTF4kau0tnp@";
 
 // URL da VPS
-const VPS_URL = "wss://saudenabr.algol.dev/loadtelemetry";
+// const VPS_URL = "wss://saudenabr.algol.dev/loadtelemetry";
+const VPS_URL = "ws://localhost:3003/loadtelemetry";
 
 console.log("🚀 Iniciando o Servidor...");
 
