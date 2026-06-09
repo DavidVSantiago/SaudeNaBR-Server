@@ -1,13 +1,11 @@
-// ====================================================================
-// CLIENTE LABORATÓRIO (APP 1) - INGESTÃO DE DADOS
-// ====================================================================
-
-// para conectar na VPS
+// para conectar à aplicação Cloud
 const API_KEY = "#htxrlLaWaU3F8aNnjviFhreqyWzI1YowyZ8bFoCBNjhp8umKToLxTF4kau0tnp@";
 
-// URL da VPS
+// URL da Cloud
 // const VPS_URL = "wss://saudenabr.algol.dev/loadtelemetry";
 const VPS_URL = "ws://localhost:3003/loadtelemetry";
+
+// Usaremos fetch nativo no lugar do @questdb/nodejs-client
 
 console.log("🚀 Iniciando o Servidor...");
 
@@ -36,18 +34,16 @@ ws.onopen = () => {
 // 2. Evento Principal: Ouvindo as mensagens da VPS
 ws.onmessage = async (event) => {
 
-    const payload = event.data.toString(); // obtém os dados e os converte para string
-
     try {
-        const data = JSON.parse(payload); // faz o parse do payload
+        const payload = JSON.parse(event.data.toString()); // obtém os dados e os converte para JSON
 
         // maquina de estados para as mensagens
-        switch (data.action) {
+        switch (payload.action) {
 
             case "CONEXAO_ESTABELECIDA":
                 console.log("🤝 Handshake aceito pela VPS. Solicitando o 1º lote de telemetria...");
                 // uma vez estabelecida a conexão, pode-se fazer a primeira solicitação das telemetrias - FETCH
-                solicitarLoteSeguro(500);
+                solicitarLoteSeguro(500); // FETCH
                 break;
 
             case "BATCH":
@@ -55,21 +51,33 @@ ws.onmessage = async (event) => {
                 if (watchdogFetch) clearTimeout(watchdogFetch);
 
                 // determina o tamanho dos dados recebidos
-                tamanhoUltimoLote = Array.isArray(data.data) ? data.data.length : 0;
+                tamanhoUltimoLote = Array.isArray(payload.data) ? payload.data.length : 0;
 
                 console.log(`📦 Lote recebido! Tamanho: ${tamanhoUltimoLote}`)
+                console.log(payload.data);
 
-                // TODO: No futuro, é exatamente AQUI que vamos:
-                // 1. Passar os dados no ONNX (IA)
-                // 2. Salvar no DuckDB
+                // Mapeia os dados recebidos para extrair as chaves que serão apagadas
+                const keysToDelete = payload.data.map((item: any) => {
+                    // Trata caso o item seja um array (CSV separado por vírgula)
+                    const values = typeof item === 'string' ? item.split(',') : [item.unixTs, item.idMotorista];
+                    return {
+                        unixTs: values[0],
+                        idMotorista: values[1]
+                    };
+                });
 
-                console.log("⚙️ Simulando processamento e inferência...");
-                // Vamos simular que processamos e extraímos as chaves para deletar
-                const fakeKeys = [{ unixTs: 1747238400, idMotorista: "001" }];
+                // 2. Salvar no QuestDB
+                console.log("💾 Salvando lote no QuestDB local...");
 
-                // Avisamos a VPS que pode apagar do banco dela
-                console.log("🗑️ Enviando ACK para exclusão na VPS...");
-                ws.send(JSON.stringify({ action: "ACK", keys: fakeKeys }));
+                try {
+                    await salvarDadosQuestDB(payload.data);
+
+                    // Avisamos a VPS que pode apagar do banco dela (só envia se o QuestDB salvou com sucesso)
+                    console.log("🗑️ Enviando ACK para exclusão na VPS...");
+                    ws.send(JSON.stringify({ action: "ACK", keys: keysToDelete }));
+                } catch (err) {
+                    console.error("Falha ao salvar no QuestDB, o ACK não será enviado para que não haja perda de dados.");
+                }
 
                 break;
 
@@ -82,16 +90,16 @@ ws.onmessage = async (event) => {
                 // após a confirmação de remoção da VPS, esperamos um tempo e enviamos nova requisição
                 setTimeout(() => {
                     console.log(tempoDeEspera === 100 ? "⚡ Acelerando busca..." : "⏳ Aguardando novos dados...");
-                    solicitarLoteSeguro(500);
+                    solicitarLoteSeguro(500); // FETCH
                 }, tempoDeEspera);
                 break;
 
             case "ERROR":
-                console.error("❌ VPS reportou erro:", data.message);
+                console.error("❌ VPS reportou erro:", payload.message);
                 break;
 
             default:
-                console.log("❓ Ação desconhecida recebida:", data);
+                console.log("❓ Ação desconhecida recebida:", payload);
         }
 
     } catch (err) {
@@ -128,4 +136,31 @@ function solicitarLoteSeguro(limit = 500) {
         console.warn("⚠️ Watchdog: A VPS não respondeu ao FETCH em 10s. Forçando reenvio...");
         solicitarLoteSeguro(limit); // Tenta de novo!
     }, 10000);
+}
+
+async function salvarDadosQuestDB(data: any[]) {
+    try {
+        // Itera sobre todos os dados do payload e monta o texto do QuestDB (InfluxDB Line Protocol)
+        let linhasILP = "";
+        
+        for (const item of data) {
+            let values = item.split(',');
+            // Formato ILP: tabela,tag1=valor1,tag2=valor2 coluna1=valor1,coluna2=valor2 timestamp
+            // O 'i' depois dos números indica que eles são inteiros no banco
+            linhasILP += `telemetria,idMotorista=${values[1]} bpm=${values[2]}i,vfc=${values[3]}i,spo2=${values[4]}i ${values[0]}\n`;
+        }
+
+        // Usa o fetch nativo da Web/Bun para enviar as linhas (rápido e 100% compatível)
+        const res = await fetch("http://127.0.0.1:9000/write?precision=ms", {
+            method: "POST",
+            body: linhasILP
+        });
+
+        if (!res.ok) {
+            throw new Error(`QuestDB retornou erro HTTP ${res.status}: ${await res.text()}`);
+        }
+    } catch (error) {
+        console.error("Erro ao salvar no QuestDB:", error);
+        throw error; // Lança o erro para cima, impedindo o envio do ACK
+    }
 }

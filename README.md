@@ -1,7 +1,12 @@
 # 03-saudenabr-server
 
-To install dependencies:
 
+para instalar o QuestDB:
+```bash
+bun add @questdb/nodejs-client
+```
+
+To install dependencies:
 ```bash
 bun install
 ```
