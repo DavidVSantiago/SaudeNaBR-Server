@@ -9,7 +9,12 @@
   },
   "private": true,
   "type": "module",
+  "scripts": {
+    "get_telemetry": "bun run src/ingestao/get_telemetry.ts",
+    "server_janelas": "bun run src/ingestao/server_janelas.ts"
+  },
   "dependencies": {
-    "@questdb/nodejs-client": "^4.2.0"
+    "@questdb/nodejs-client": "^4.2.0",
+    "ioredis": "^5.11.1"
   }
 }

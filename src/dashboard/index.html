@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Painel de Telemetria</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1e1e1e;
+            color: #fff;
+            padding: 20px;
+            margin: 0;
+        }
+
+        h1 {
+            text-align: center;
+            color: #4CAF50;
+            margin-bottom: 30px;
+        }
+
+        #motoristas-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            justify-content: center;
+        }
+
+        .motorista-card {
+            background-color: #2d2d2d;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+            width: 380px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .motorista-card h3 {
+            margin-top: 0;
+            color: #2196F3;
+            border-bottom: 1px solid #444;
+            padding-bottom: 10px;
+        }
+
+        .log-container {
+            width: 100%;
+            height: 280px;
+            background-color: #121212;
+            border: 1px solid #444;
+            border-radius: 4px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 13px;
+            overflow-y: auto;
+            box-sizing: border-box;
+            padding: 10px;
+        }
+
+        .log-line {
+            margin-bottom: 8px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+            border-bottom: 1px dashed #333;
+            padding-bottom: 4px;
+        }
+
+        /* Barra de rolagem estilizada pro container */
+        .log-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .log-container::-webkit-scrollbar-track {
+            background: #1e1e1e;
+        }
+
+        .log-container::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 4px;
+        }
+
+        .log-container::-webkit-scrollbar-thumb:hover {
+            background: #666;
+        }
+
+        #status {
+            text-align: center;
+            color: #aaa;
+            margin-bottom: 20px;
+        }
+
+        .conectado {
+            color: #4CAF50 !important;
+            font-weight: bold;
+        }
+
+        .desconectado {
+            color: #f44336 !important;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>📡 Telemetria em Tempo Real (Janelas de 15s)</h1>
+    <div id="status">Status WebSocket: <span id="ws-status" class="desconectado">Desconectado</span></div>
+
+    <div id="motoristas-container">
+        <!-- Textareas serão inseridos aqui automaticamente via JavaScript -->
+    </div>
+
+    <script>
+        const container = document.getElementById('motoristas-container');
+        const statusEl = document.getElementById('ws-status');
+
+        // Mantém referência dos containers já criados para não recriar a interface à toa
+        const logsDivs = {};
+
+        // Gera uma cor fixa e vibrante baseada no timestamp da leitura
+        function gerarCorPorTimestamp(ts) {
+            let hash = 0;
+            const str = ts.toString();
+            for (let i = 0; i < str.length; i++) {
+                hash = str.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            const h = Math.abs(hash) % 360;
+            return `hsl(${h}, 85%, 70%)`; // Retorna uma cor HSL com bom brilho
+        }
+
+        // Cria a interface (Card + LogContainer) para um novo motorista que chegou
+        function criarLogContainer(idMotorista) {
+            const card = document.createElement('div');
+            card.className = 'motorista-card';
+
+            const titulo = document.createElement('h3');
+            titulo.textContent = `🚗 Motorista: ${idMotorista}`;
+
+            const logContainer = document.createElement('div');
+            logContainer.className = 'log-container';
+
+            card.appendChild(titulo);
+            card.appendChild(logContainer);
+            container.appendChild(card);
+
+            // Salva na memória para atualizar depois
+            logsDivs[idMotorista] = logContainer;
+        }
+
+        // Atualiza o texto do container de um motorista específico
+        function atualizarJanela(idMotorista, janela) {
+            // Se for a primeira vez que vemos esse motorista, cria o card dele
+            if (!logsDivs[idMotorista]) {
+                criarLogContainer(idMotorista);
+            }
+
+            const containerLog = logsDivs[idMotorista];
+            containerLog.innerHTML = ''; // Limpa os logs atuais
+
+            // Adiciona cada leitura como uma div separada e colorida
+            janela.forEach((leitura, index) => {
+                const num = (index + 1).toString().padStart(2, '0');
+                const cor = gerarCorPorTimestamp(leitura.timestamp);
+
+                const divLinha = document.createElement('div');
+                divLinha.className = 'log-line';
+                divLinha.style.color = cor;
+                divLinha.innerText = `[${num}] TS: ${leitura.timestamp} \n     BPM: ${leitura.bpm} | VFC: ${leitura.vfc} | SPO2: ${leitura.sop2}`;
+
+                containerLog.appendChild(divLinha);
+            });
+
+            // Força a barra de rolagem sempre para baixo
+            containerLog.scrollTop = containerLog.scrollHeight;
+        }
+
+        // ==========================================
+        // LÓGICA DO WEBSOCKET
+        // ==========================================
+        function conectarWebSocket() {
+            const ws = new WebSocket("ws://localhost:3000");
+
+            ws.onopen = () => {
+                console.log("Conectado ao Servidor WebSocket!");
+                statusEl.textContent = "Conectado";
+                statusEl.className = "conectado";
+            };
+
+            ws.onmessage = (event) => {
+                const mensagem = JSON.parse(event.data);
+
+                // Trata a mensagem de quando a página acaba de carregar
+                if (mensagem.tipo === "ESTADO_INICIAL") {
+                    const janelas = mensagem.dados;
+                    for (const idMotorista in janelas) {
+                        atualizarJanela(idMotorista, janelas[idMotorista]);
+                    }
+                }
+                // Trata as atualizações em tempo real que chegam depois
+                else if (mensagem.tipo === "NOVAS_LEITURAS") {
+                    atualizarJanela(mensagem.idMotorista, mensagem.janelaAtualizada);
+                }
+            };
+
+            ws.onclose = () => {
+                console.log("Desconectado do servidor.");
+                statusEl.textContent = "Desconectado (Tentando reconectar em 3s...)";
+                statusEl.className = "desconectado";
+
+                // Tenta reconectar automaticamente se o servidor cair
+                setTimeout(conectarWebSocket, 3000);
+            };
+
+            ws.onerror = (err) => {
+                console.error("Erro no WebSocket:", err);
+            };
+        }
+
+        // Inicia a conexão
+        conectarWebSocket();
+    </script>
+</body>
+
+</html>

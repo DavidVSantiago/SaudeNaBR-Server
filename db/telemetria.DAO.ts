@@ -1,7 +1,14 @@
+import Redis from "ioredis";
+
 // Cache em memória para guardar as chaves já processadas recentemente
 // Isso evita que, se a VPS reenviar o mesmo lote (porque o ACK falhou),
 // ou se houver linhas duplicadas no mesmo lote, elas não sejam inseridas no QuestDB.
 const cacheChavesProcessadas = new Set<string>();
+
+const redis = new Redis({
+    host: "127.0.0.1",
+    port: 6379
+})
 
 export async function salvarDadosQuestDB(data: any[]) {
     try {
@@ -52,3 +59,37 @@ export async function salvarDadosQuestDB(data: any[]) {
         throw error; // Lança o erro para cima, impedindo o envio do ACK
     }
 }
+
+export async function salvarRedisStream(data: any[]) {
+    try {
+        // pipeline para envio multiplo
+        const pipeline = redis.pipeline();
+        for (const item of data) {
+            let values = typeof item === 'string' ? item.split(',') : [item.unixTs, item.idMotorista, item.bpm, item.vfc, item.spo2];
+
+            const timestamp = values[0];
+            const idMotorista = values[1];
+            const bpm = values[2];
+            const vfc = values[3];
+            const spo2 = values[4];
+
+            // XADD: Adiciona na stream dedicada do motorista
+            pipeline.xadd(
+                `telemetria:stream:${idMotorista}`, // Uma esteira dedicada por motorista
+                'MAXLEN', '~', 5000, // Mantém até 5.000 itens (dá uma folga confortável além dos 3600 itens de 1h)
+                '*', // O '*': Pede para o Redis criar um ID único automático para essa mensagem
+                'timestamp', timestamp,
+                'bpm', bpm,
+                'vfc', vfc,
+                'spo2', spo2
+            );
+        }
+        // Executa todo o lote no Redis de uma vez
+        await pipeline.exec();
+
+    } catch (error) {
+        console.error("Erro ao salvar no Redis Stream:", error);
+        throw error; // Lança para o getTelemetry lidar
+    }
+}
+

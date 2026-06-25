@@ -1,4 +1,12 @@
-import { salvarDadosQuestDB } from '../db/telemetria.DAO';
+import { salvarDadosQuestDB, salvarRedisStream } from '../../db/telemetria.DAO';
+
+
+// para conectar à aplicação Cloud
+const API_KEY = "#htxrlLaWaU3F8aNnjviFhreqyWzI1YowyZ8bFoCBNjhp8umKToLxTF4kau0tnp@";
+
+// URL da Cloud
+const VPS_URL = "wss://saudenabr.algol.dev/loadtelemetry";
+// const VPS_URL = "ws://localhost:3003/loadtelemetry";
 
 // O Bun usa WebSocket nativo da Web API
 export let ws: WebSocket | null = null;
@@ -68,6 +76,14 @@ export async function onMessage(event: any) {
                 // determina o tamanho dos dados recebidos
                 tamanhoUltimoLote = Array.isArray(payload.data) ? payload.data.length : 0;
 
+                if (tamanhoUltimoLote == 0) {
+                    console.log(`📦 Lote recebido está Vazio!`);
+                    setTimeout(() => {
+                        solicitarLoteSeguro(tamanhoMaxLote); // FETCH
+                    }, 500);
+                    return; // Interrompe a execução aqui (não salva no banco nem manda ACK)
+                }
+
                 console.log(`📦 Lote recebido! Tamanho: ${tamanhoUltimoLote}`)
                 //console.log(payload.data);
 
@@ -81,9 +97,16 @@ export async function onMessage(event: any) {
                     };
                 });
 
-                // 2. Salvar no QuestDB
-                console.log("💾 Salvando lote no QuestDB local...");
+                // 2. Salvar nas estruturas de real time (janelas deslizantes)
+                console.log("🚀 Enviando lote para a Esteira (Stream) do Redis...");
+                try {
+                    await salvarRedisStream(payload.data);
+                } catch (err) {
+                    console.error("Falha ao scolocar dados na esteira do Redis. O ACK não será enviado para que não haja perda de dados.");
+                }
 
+                // 3. Salvar no QuestDB
+                console.log("💾 Salvando lote no QuestDB local...");
                 try {
                     await salvarDadosQuestDB(payload.data);
 
@@ -93,8 +116,9 @@ export async function onMessage(event: any) {
                         ws.send(JSON.stringify({ action: "ACK", keys: keysToDelete }));
                     }
                 } catch (err) {
-                    console.error("Falha ao salvar no QuestDB, o ACK não será enviado para que não haja perda de dados.");
+                    console.error("Falha ao salvar no QuestDB. O ACK não será enviado para que não haja perda de dados.");
                 }
+
 
                 break;
 
@@ -102,7 +126,7 @@ export async function onMessage(event: any) {
                 console.log("✅ VPS confirmou a exclusão do lote.");
 
                 // se o ultimo lote veio lotado, o tempo de espera para a próxima requisição de dados é mínimo
-                const tempoDeEspera = (tamanhoUltimoLote === tamanhoMaxLote) ? 100 : 5000;
+                const tempoDeEspera = (tamanhoUltimoLote === tamanhoMaxLote) ? 100 : 500;
 
                 // após a confirmação de remoção da VPS, esperamos um tempo e enviamos nova requisição
                 setTimeout(() => {
@@ -163,3 +187,6 @@ function solicitarLoteSeguro(limit = 500) {
         solicitarLoteSeguro(limit); // Tenta de novo!
     }, 10000);
 }
+
+console.log("🚀 Iniciando o Servidor...");
+conectarVPS(VPS_URL, API_KEY);
